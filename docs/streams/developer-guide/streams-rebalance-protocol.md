@@ -119,6 +119,16 @@ The following broker configurations control the behavior of streams groups. For 
 * [`group.streams.num.standby.replicas`](/{version}/configuration/broker-configs#brokerconfigs_group.streams.num.standby.replicas): The default number of standby replicas for each task.
 * [`group.streams.max.standby.replicas`](/{version}/configuration/broker-configs#brokerconfigs_group.streams.max.standby.replicas): Maximum for dynamic configurations of the standby replica configuration.
 * [`group.streams.initial.rebalance.delay.ms`](/{version}/configuration/broker-configs#brokerconfigs_group.streams.initial.rebalance.delay.ms): The first rebalance of a new (ie, previously empty) group is delayed by this amount to allow more members to join the group.
+* [`group.streams.assignment.interval.ms`](/{version}/configuration/broker-configs#brokerconfigs_group.streams.assignment.interval.ms): The default interval between assignment updates for a streams group.
+* [`group.streams.min.assignment.interval.ms`](/{version}/configuration/broker-configs#brokerconfigs_group.streams.min.assignment.interval.ms): The minimum interval between assignment updates.
+* [`group.streams.max.assignment.interval.ms`](/{version}/configuration/broker-configs#brokerconfigs_group.streams.max.assignment.interval.ms): The maximum interval between assignment updates.
+* [`group.streams.rack.aware.assignment.tags`](/{version}/configuration/broker-configs#brokerconfigs_group.streams.rack.aware.assignment.tags): The default list of client tag keys used to distribute standby replicas across Kafka Streams instances. When configured, and the used broker-side assignor supports it, it will make a best-effort to distribute standby tasks over each client tag dimension.
+* [`group.streams.assignor.offload.enable`](/{version}/configuration/broker-configs#brokerconfigs_group.streams.assignor.offload.enable): Whether to offload streams group assignment to a group coordinator background thread.
+* [`group.streams.task.offset.interval.ms`](/{version}/configuration/broker-configs#brokerconfigs_group.streams.task.offset.interval.ms): The default interval in which the warmup task changelog offsets on a client are updated on the broker. The offsets are sent with the next heartbeat after this time has passed.
+* [`group.streams.min.task.offset.interval.ms`](/{version}/configuration/broker-configs#brokerconfigs_group.streams.min.task.offset.interval.ms): Minimum for dynamic configurations of the task offset interval configuration.
+* [`group.streams.num.warmup.replicas`](/{version}/configuration/broker-configs#brokerconfigs_group.streams.num.warmup.replicas): The default maximum number of warmup task replicas.
+* [`group.streams.max.warmup.replicas`](/{version}/configuration/broker-configs#brokerconfigs_group.streams.max.warmup.replicas): Maximum for dynamic configurations of the warmup replica configuration.
+* [`group.streams.acceptable.recovery.lag`](/{version}/configuration/broker-configs#brokerconfigs_group.streams.acceptable.recovery.lag): The default maximum acceptable lag (number of offsets to catch up) for a client to be considered caught-up enough to receive an active task assignment.
 * [`group.streams.topology.description.plugin.class`](/{version}/configuration/broker-configs#brokerconfigs_group.streams.topology.description.plugin.class): The fully qualified class name of a `StreamsGroupTopologyDescriptionPlugin` implementation. When not set, the [topology description feature](/{version}/streams/developer-guide/topology-description-plugin/) is disabled.
 
 ## Group Configuration
@@ -133,6 +143,12 @@ The following group-level configurations are available for streams groups:
 * [`streams.heartbeat.interval.ms`](/{version}/configuration/group-configs#groupconfigs_streams.heartbeat.interval.ms): The heartbeat interval given to the members.
 * [`streams.num.standby.replicas`](/{version}/configuration/group-configs#groupconfigs_streams.num.standby.replicas): The number of standby replicas for each task.
 * [`streams.initial.rebalance.delay.ms`](/{version}/configuration/group-configs#groupconfigs_streams.initial.rebalance.delay.ms): The first rebalance of a group is delayed by this amount to allow more members to join the group.
+* [`streams.assignment.interval.ms`](/{version}/configuration/group-configs#groupconfigs_streams.assignment.interval.ms): The interval between assignment updates for a streams group.
+* [`streams.rack.aware.assignment.tags`](/{version}/configuration/group-configs#groupconfigs_streams.rack.aware.assignment.tags): List of client tag keys used to distribute standby replicas across Kafka Streams instances. When configured, and the used broker-side assignor supports it, it will make a best-effort to distribute standby tasks over each client tag dimension.
+* [`streams.assignor.offload.enable`](/{version}/configuration/group-configs#groupconfigs_streams.assignor.offload.enable): Whether to offload streams group assignment to a group coordinator background thread.
+* [`streams.task.offset.interval.ms`](/{version}/configuration/group-configs#groupconfigs_streams.task.offset.interval.ms): The interval in which the warmup task changelog offsets on a client are updated on the broker. The offsets are sent with the next heartbeat after this time has passed.
+* [`streams.num.warmup.replicas`](/{version}/configuration/group-configs#groupconfigs_streams.num.warmup.replicas): The maximum number of warmup task replicas.
+* [`streams.acceptable.recovery.lag`](/{version}/configuration/group-configs#groupconfigs_streams.acceptable.recovery.lag): The maximum acceptable lag (number of offsets to catch up) for a client to be considered caught-up enough to receive an active task assignment.
 
 ### Example: Setting Group-Level Configuration
 ```
@@ -154,17 +170,19 @@ The following client configuration enables the streams rebalance protocol:
 ### Ignored Configurations
 
 The following configurations are ignored when the streams rebalance protocol is enabled:
-* [`acceptable.recovery.lag`](/{version}/configuration/kafka-streams-configs#streamsconfigs_acceptable.recovery.lag)
-* [`max.warmup.replicas`](/{version}/configuration/kafka-streams-configs#streamsconfigs_max.warmup.replicas)
+* [`acceptable.recovery.lag`](/{version}/configuration/kafka-streams-configs#streamsconfigs_acceptable.recovery.lag) (use group-level `streams.acceptable.recovery.lag` instead)
+* [`max.warmup.replicas`](/{version}/configuration/kafka-streams-configs#streamsconfigs_max.warmup.replicas) (use group-level `streams.num.warmup.replicas` instead)
 * [`num.standby.replicas`](/{version}/configuration/kafka-streams-configs#streamsconfigs_num.standby.replicas) (use group-level configuration instead)
 * [`probing.rebalance.interval.ms`](/{version}/configuration/kafka-streams-configs#streamsconfigs_probing.rebalance.interval.ms)
-* [`rack.aware.assignment.tags`](/{version}/configuration/kafka-streams-configs#streamsconfigs_rack.aware.assignment.tags)
+* [`rack.aware.assignment.tags`](/{version}/configuration/kafka-streams-configs#streamsconfigs_rack.aware.assignment.tags) (use group-level `streams.rack.aware.assignment.tags` instead)
 * [`rack.aware.assignment.strategy`](/{version}/configuration/kafka-streams-configs#streamsconfigs_rack.aware.assignment.strategy)
 * [`rack.aware.assignment.traffic_cost`](/{version}/configuration/kafka-streams-configs#streamsconfigs_rack.aware.assignment.traffic_cost)
 * [`rack.aware.assignment.non_overlap_cost`](/{version}/configuration/kafka-streams-configs#streamsconfigs_rack.aware.assignment.non_overlap_cost)
 * [`task.assignor.class`](/{version}/configuration/kafka-streams-configs#streamsconfigs_task.assignor.class)
 * [`session.timeout.ms`](/{version}/configuration/kafka-streams-configs#streamsconfigs_session.timeout.ms) (use group-level configuration instead)
 * [`heartbeat.interval.ms`](/{version}/configuration/kafka-streams-configs#streamsconfigs_heartbeat.interval.ms) (use group-level configuration instead)
+
+**Note:** `client.rack` and `client.tag.*` are *not* ignored. They are still configured on the client and reported to the broker in the heartbeat, where the broker-side assignor uses them. Only the client-side `rack.aware.assignment.*` configurations above are ignored.
 
 # Administration
 
@@ -215,7 +233,7 @@ If any source topics or internal topics are missing, the group enters a state `N
 
 ## Centralized Assignment Configuration
 
-Core assignment options are configured centrally on the broker, without relying on each client's configuration. This allows tuning a streams group without redeploying the streams application. The core assignment option introduced on the broker-side is `num.standby.replicas`. This can be configured both globally on the broker and dynamically for specific streams groups through the `IncrementalAlterConfigs` and `DescribeConfigs` RPCs.
+Core assignment options are configured centrally on the broker, without relying on each client's configuration. This allows tuning a streams group without redeploying the streams application. The assignment options moved to the broker-side are `num.standby.replicas`, `num.warmup.replicas`, `acceptable.recovery.lag` and `rack.aware.assignment.tags`. Each of these can be configured both globally on the broker (with a `group.streams.` prefix) and dynamically for specific streams groups (with a `streams.` prefix) through the `IncrementalAlterConfigs` and `DescribeConfigs` RPCs. See the [broker configuration](/{version}/configuration/broker-configs) and [group configuration](/{version}/configuration/group-configs) documentation for the full list.
 
 The last used assignment configuration is stored in the group metadata on the broker. This way, if an assignment configuration is dynamically changed, reassignment can be triggered immediately.
 
