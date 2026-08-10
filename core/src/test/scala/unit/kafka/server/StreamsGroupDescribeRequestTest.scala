@@ -29,7 +29,7 @@ import scala.jdk.CollectionConverters._
 import org.apache.kafka.coordinator.group.GroupCoordinatorConfig
 import org.apache.kafka.security.authorizer.AclEntry
 import org.apache.kafka.server.common.Feature
-import org.junit.Assert.{assertEquals, assertTrue}
+import org.junit.Assert.{assertEquals, assertNull, assertTrue}
 
 import java.lang.{Byte => JByte}
 
@@ -265,6 +265,13 @@ class StreamsGroupDescribeRequestTest(cluster: ClusterInstance) extends GroupCoo
         for (describedGroup <- actual) {
           assertEquals("Stable", describedGroup.groupState)
           assertTrue("Group epoch is not equal to the assignment epoch", describedGroup.groupEpoch == describedGroup.assignmentEpoch)
+          // AssignorName was added in version 1. Neither group selects an assignor, so both report the
+          // cluster default, which is the first entry of group.streams.assignors.
+          if (version >= 1) {
+            assertEquals("sticky", describedGroup.assignorName)
+          } else {
+            assertNull("AssignorName is not part of the schema before version 1", describedGroup.assignorName)
+          }
           // Verify topology
           assertEquals(1, describedGroup.topology.epoch)
           assertEquals(1, describedGroup.topology.subtopologies.size)

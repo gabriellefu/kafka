@@ -32,6 +32,7 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -286,6 +287,19 @@ public class DescribeStreamsGroupsHandlerTest {
         assertTrue(result.completedKeys.isEmpty());
         assertEquals(Set.of(key), result.failedKeys.keySet());
         assertInstanceOf(IllegalStateException.class, result.failedKeys.get(key));
+    }
+
+    @Test
+    public void testAssignorNameParsed() {
+        StreamsGroupDescription description = describe(newDescribedGroup().setAssignorName("sticky"));
+        assertEquals(Optional.of("sticky"), description.assignorName());
+    }
+
+    @Test
+    public void testAssignorNameAbsentWhenNotSetByBroker() {
+        // A broker answering at describe version 0 does not carry the field at all.
+        StreamsGroupDescription description = describe(newDescribedGroup().setAssignorName(null));
+        assertEquals(Optional.empty(), description.assignorName());
     }
 
     private StreamsGroupDescribeResponseData.DescribedGroup newDescribedGroup() {

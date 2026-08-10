@@ -35,6 +35,13 @@ class StreamsTopologyDescriptionPluginTest(Test):
     SOURCE_TOPIC = "topologyDescriptionPluginSource"
     SINK_TOPIC = "topologyDescriptionPluginSink"
 
+    # KIP-1357. MockAssignor ships in the group-coordinator jar, so no extra class has to be put on the
+    # broker's classpath to register a non-built-in assignor.
+    STREAMS_APPLICATION_ID = "kafka-streams-system-test-topology-description-plugin"
+    MOCK_ASSIGNOR_CLASS = "org.apache.kafka.coordinator.group.streams.assignor.MockAssignor"
+    MOCK_ASSIGNOR_NAME = "mock"
+    ASSIGNOR_FALLBACK_LOG = "is not available; falling back to the default assignor"
+
     def __init__(self, test_context):
         super(StreamsTopologyDescriptionPluginTest, self).__init__(test_context=test_context)
         self.topics = {
@@ -42,14 +49,13 @@ class StreamsTopologyDescriptionPluginTest(Test):
             self.SINK_TOPIC: {"partitions": 1, "replication-factor": 1},
         }
 
-    def setup_kafka(self, plugin_enabled):
-        server_prop_overrides = [
-            ["group.streams.min.session.timeout.ms", "10000"],
-            ["group.streams.session.timeout.ms", "10000"],
-        ]
+    def setup_kafka(self, plugin_enabled, extra_server_prop_overrides=None):
+        server_prop_overrides = self.base_server_prop_overrides()
         if plugin_enabled:
             server_prop_overrides.append(
                 ["group.streams.topology.description.plugin.class", INMEMORY_TOPOLOGY_DESCRIPTION_PLUGIN_CLASS])
+        if extra_server_prop_overrides is not None:
+            server_prop_overrides.extend(extra_server_prop_overrides)
         self.kafka = KafkaService(
             self.test_context,
             num_nodes=1,
@@ -60,6 +66,13 @@ class StreamsTopologyDescriptionPluginTest(Test):
         )
         self.kafka.start()
         self.kafka.run_features_command("upgrade", "streams.version", 1)
+
+    @staticmethod
+    def base_server_prop_overrides():
+        return [
+            ["group.streams.min.session.timeout.ms", "10000"],
+            ["group.streams.session.timeout.ms", "10000"],
+        ]
 
     @cluster(num_nodes=2)
     @matrix(metadata_quorum=[quorum.combined_kraft])
@@ -160,4 +173,48 @@ class StreamsTopologyDescriptionPluginTest(Test):
             allow_fail=False)
         assert int(next(pushed).strip()) == 0, \
             "Client logged a successful push despite no plugin being configured on the broker"
+        processor.stop()
+
+    @cluster(num_nodes=2)
+    @matrix(metadata_quorum=[quorum.combined_kraft])
+    def test_group_falls_back_when_its_assignor_is_removed(self, metadata_quorum):
+        """
+        A group that selected a custom broker-side task assignor (KIP-1357) keeps running after the broker is
+        restarted without that assignor registered. The coordinator cannot resolve the name the group has
+        persisted, so it warns and falls back to the cluster default, and the application still gets an
+        assignment. Only a restart exercises this, because group.streams.assignors is a static broker config.
+        """
+        self.setup_kafka(
+            plugin_enabled=False,
+            extra_server_prop_overrides=[["group.streams.assignors", "sticky,%s" % self.MOCK_ASSIGNOR_CLASS]])
+
+        processor = StreamsTopologyDescriptionPluginService(self.test_context, self.kafka)
+        with processor.node.account.monitor_log(processor.LOG_FILE) as monitor:
+            processor.start()
+            monitor.wait_until(self.STREAMS_RUNNING_LOG,
+                               timeout_sec=60,
+                               err_msg="Never saw 'REBALANCING -> RUNNING' message " + str(processor.node.account))
+
+        assert self.kafka.set_streams_assignor_name(self.STREAMS_APPLICATION_ID, self.MOCK_ASSIGNOR_NAME), \
+            "Could not select the custom assignor for group %s" % self.STREAMS_APPLICATION_ID
+
+        # Take the custom assignor out of the registry. The group config still names it, and it survives the
+        # restart because it lives in the metadata log.
+        broker_node = self.kafka.nodes[0]
+        self.kafka.server_prop_overrides = self.base_server_prop_overrides() + [["group.streams.assignors", "sticky"]]
+        self.kafka.restart_node(broker_node)
+
+        # Restarting the application brings in a new member, which bumps the group epoch and so forces the
+        # coordinator to resolve the group's now-missing assignor and compute a fresh assignment.
+        with broker_node.account.monitor_log(self.BROKER_LOG_FILE) as broker_monitor, \
+                processor.node.account.monitor_log(processor.LOG_FILE) as processor_monitor:
+            processor.restart()
+            broker_monitor.wait_until(self.ASSIGNOR_FALLBACK_LOG,
+                                      timeout_sec=120,
+                                      err_msg="Broker never fell back to the default assignor after the "
+                                              "group's assignor was removed")
+            processor_monitor.wait_until(self.STREAMS_RUNNING_LOG,
+                                         timeout_sec=120,
+                                         err_msg="Streams application did not reach RUNNING again after the "
+                                                 "broker fell back to the default assignor")
         processor.stop()

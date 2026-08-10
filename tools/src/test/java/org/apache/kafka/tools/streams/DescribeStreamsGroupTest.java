@@ -25,6 +25,7 @@ import org.apache.kafka.common.test.api.ClusterTest;
 import org.apache.kafka.common.test.api.ClusterTestDefaults;
 import org.apache.kafka.common.test.api.Type;
 import org.apache.kafka.common.utils.internals.Exit;
+import org.apache.kafka.coordinator.group.streams.assignor.MockAssignor;
 import org.apache.kafka.streams.GroupProtocol;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsBuilder;
@@ -54,6 +55,7 @@ import joptsimple.OptionException;
 import static org.apache.kafka.coordinator.group.GroupCoordinatorConfig.GROUP_INITIAL_REBALANCE_DELAY_MS_CONFIG;
 import static org.apache.kafka.coordinator.group.GroupCoordinatorConfig.OFFSETS_TOPIC_PARTITIONS_CONFIG;
 import static org.apache.kafka.coordinator.group.GroupCoordinatorConfig.OFFSETS_TOPIC_REPLICATION_FACTOR_CONFIG;
+import static org.apache.kafka.coordinator.group.GroupCoordinatorConfig.STREAMS_GROUP_ASSIGNORS_CONFIG;
 import static org.apache.kafka.coordinator.group.GroupCoordinatorConfig.STREAMS_GROUP_MIN_HEARTBEAT_INTERVAL_MS_CONFIG;
 import static org.apache.kafka.coordinator.group.GroupCoordinatorConfig.STREAMS_GROUP_MIN_SESSION_TIMEOUT_MS_CONFIG;
 import static org.apache.kafka.coordinator.group.GroupCoordinatorConfig.STREAMS_GROUP_TOPOLOGY_DESCRIPTION_PLUGIN_CLASS_CONFIG;
@@ -123,6 +125,28 @@ public class DescribeStreamsGroupTest {
             assertDescribeStreamsGroupWithMembersAndVerboseOptions(bootstrapServers);
             assertDescribeMultipleStreamsGroupWithMembersAndVerboseOptions(bootstrapServers);
             assertDescribeStreamsGroupWithTopologyOption(bootstrapServers);
+        }
+    }
+
+    @ClusterTest(
+        serverProperties = {
+            // The class name has to be spelled out because annotation values must be compile-time constants.
+            // It is the only entry, so it is also the cluster-wide default assignor.
+            @ClusterConfigProperty(key = STREAMS_GROUP_ASSIGNORS_CONFIG, value = "org.apache.kafka.coordinator.group.streams.assignor.MockAssignor")
+        }
+    )
+    public void testDescribeStreamsGroupsWithCustomAssignor(ClusterInstance cluster) throws Exception {
+        cluster.createTopic(INPUT_TOPIC, 2, (short) 1);
+        try (KafkaStreams ignored = startStreamsApp(cluster, APP_ID, INPUT_TOPIC, OUTPUT_TOPIC)) {
+            // The assignor is registered by class name, but the tool reports the name the assignor advertises.
+            final List<String> expectedHeader = List.of("GROUP", "COORDINATOR", "(ID)", "ASSIGNOR", "STATE", "#MEMBERS");
+            final Set<List<String>> expectedRows = Set.of(List.of(APP_ID, "", "", MockAssignor.MOCK_ASSIGNOR_NAME, "Stable", "2"));
+            // The coordinator is not deterministic, so we don't care about it.
+            final List<Integer> dontCares = List.of(1, 2);
+
+            validateDescribeOutput(
+                List.of("--bootstrap-server", cluster.bootstrapServers(), "--describe", "--state", "--group", APP_ID),
+                expectedHeader, expectedRows, dontCares);
         }
     }
 

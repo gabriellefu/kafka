@@ -17,19 +17,20 @@
 package kafka.server
 
 import kafka.utils.TestUtils
-import org.apache.kafka.clients.admin.{AlterConfigOp, ConfigEntry}
+import org.apache.kafka.clients.admin.{Admin, AlterConfigOp, ConfigEntry}
 import org.apache.kafka.common.config.ConfigResource
-import org.apache.kafka.common.message.{StreamsGroupHeartbeatRequestData, StreamsGroupHeartbeatResponseData}
+import org.apache.kafka.common.message.{StreamsGroupDescribeResponseData, StreamsGroupHeartbeatRequestData, StreamsGroupHeartbeatResponseData}
 import org.apache.kafka.common.protocol.Errors
 import org.apache.kafka.common.test.ClusterInstance
 import org.apache.kafka.common.test.api.{ClusterConfigProperty, ClusterFeature, ClusterTest, ClusterTestDefaults, Type}
 import org.apache.kafka.coordinator.group.{GroupConfig, GroupCoordinatorConfig}
-import org.apache.kafka.coordinator.group.api.streams.assignor.{GroupAssignment, GroupSpec, MemberAssignment, TaskAssignor, TopologyDescriber}
+import org.apache.kafka.coordinator.group.api.streams.assignor.{GroupAssignment, GroupSpec, MemberAssignment, TaskAssignor, TaskAssignorException, TopologyDescriber}
 import org.apache.kafka.common.errors.{InvalidConfigurationException, UnsupportedVersionException}
 import org.apache.kafka.server.common.Feature
 import org.junit.jupiter.api.Assertions.{assertEquals, assertNotNull, assertNull, assertThrows, assertTrue}
 
 import java.util.concurrent.ExecutionException
+import scala.collection.mutable
 import scala.jdk.CollectionConverters._
 
 object StreamsGroupHeartbeatRequestTest {
@@ -1075,6 +1076,164 @@ class StreamsGroupHeartbeatRequestTest(cluster: ClusterInstance) extends GroupCo
   }
 
   @ClusterTest(
+    serverProperties = Array(
+      // The class name has to be spelled out because annotation values must be compile-time constants.
+      // It is the only entry, so it is also the cluster-wide default assignor.
+      new ClusterConfigProperty(
+        key = GroupCoordinatorConfig.STREAMS_GROUP_ASSIGNORS_CONFIG,
+        value = "kafka.server.AllTasksToFirstMemberAssignor"
+      ),
+      new ClusterConfigProperty(key = GroupCoordinatorConfig.STREAMS_GROUP_ASSIGNMENT_INTERVAL_MS_CONFIG, value = "0")
+    )
+  )
+  def testCustomAssignorComputesTheTargetAssignment(): Unit = {
+    val admin = cluster.admin()
+    val groupId = "test-group"
+    val topicName = "test-topic"
+    val memberId1 = "test-member-1"
+    val memberId2 = "test-member-2"
+
+    try {
+      createOffsetsTopicAndSourceTopic(admin, topicName)
+      val topology = createMockTopology(topicName)
+
+      val responses = mutable.Map(
+        memberId1 -> joinStreamsGroup(groupId, memberId1, topology),
+        memberId2 -> joinStreamsGroup(groupId, memberId2, topology)
+      )
+      val describedGroup = heartbeatUntilGroupIsStable(groupId, responses)
+
+      // Every task went to the first member, which is what AllTasksToFirstMemberAssignor does and what the
+      // sticky assignor would never do, so the assignment demonstrably came from the configured assignor.
+      assertEquals(AllTasksToFirstMemberAssignor.NAME, describedGroup.assignorName())
+      assertEquals(Set(0, 1, 2), activeTaskPartitionsOf(describedGroup, memberId1))
+      assertEquals(Set.empty[Int], activeTaskPartitionsOf(describedGroup, memberId2))
+    } finally {
+      admin.close()
+    }
+  }
+
+  @ClusterTest(
+    serverProperties = Array(
+      // The class name has to be spelled out because annotation values must be compile-time constants.
+      new ClusterConfigProperty(
+        key = GroupCoordinatorConfig.STREAMS_GROUP_ASSIGNORS_CONFIG,
+        value = "sticky,kafka.server.AllTasksToFirstMemberAssignor"
+      ),
+      new ClusterConfigProperty(key = GroupCoordinatorConfig.STREAMS_GROUP_ASSIGNMENT_INTERVAL_MS_CONFIG, value = "0")
+    )
+  )
+  def testChangingTheAssignorDoesNotTriggerARebalance(): Unit = {
+    val admin = cluster.admin()
+    val groupId = "test-group"
+    val topicName = "test-topic"
+    val memberId1 = "test-member-1"
+    val memberId2 = "test-member-2"
+    val memberId3 = "test-member-3"
+
+    try {
+      createOffsetsTopicAndSourceTopic(admin, topicName)
+      val topology = createMockTopology(topicName)
+
+      // The group starts on the default assignor, which is the first entry of group.streams.assignors.
+      val responses = mutable.Map(
+        memberId1 -> joinStreamsGroup(groupId, memberId1, topology),
+        memberId2 -> joinStreamsGroup(groupId, memberId2, topology)
+      )
+      val stickyGroup = heartbeatUntilGroupIsStable(groupId, responses)
+      assertEquals("sticky", stickyGroup.assignorName())
+      val stickyAssignment = Map(
+        memberId1 -> activeTaskPartitionsOf(stickyGroup, memberId1),
+        memberId2 -> activeTaskPartitionsOf(stickyGroup, memberId2)
+      )
+      assertEquals(Set(0, 1, 2), stickyAssignment.values.flatten.toSet)
+      assertTrue(stickyAssignment.values.forall(_.nonEmpty),
+        s"The sticky assignor should have spread the tasks over both members, but assigned $stickyAssignment")
+
+      // Selecting a different assignor only changes which assignor computes the *next* assignment.
+      setStreamsAssignorName(admin, groupId, AllTasksToFirstMemberAssignor.NAME)
+      waitForGroupAssignorName(groupId, AllTasksToFirstMemberAssignor.NAME)
+
+      // No group epoch bump, so nothing is recomputed and the sticky assignment survives untouched.
+      val unchangedGroup = heartbeatUntilGroupIsStable(groupId, responses)
+      assertEquals(stickyGroup.assignmentEpoch(), unchangedGroup.assignmentEpoch())
+      assertEquals(stickyAssignment(memberId1), activeTaskPartitionsOf(unchangedGroup, memberId1))
+      assertEquals(stickyAssignment(memberId2), activeTaskPartitionsOf(unchangedGroup, memberId2))
+
+      // A third member joining bumps the group epoch, and only then does the new assignor take over.
+      responses.put(memberId3, joinStreamsGroup(groupId, memberId3, topology))
+      val rebalancedGroup = heartbeatUntilGroupIsStable(groupId, responses)
+      assertTrue(rebalancedGroup.assignmentEpoch() > stickyGroup.assignmentEpoch(),
+        "The assignment epoch should have advanced once the third member joined")
+      assertEquals(Set(0, 1, 2), activeTaskPartitionsOf(rebalancedGroup, memberId1))
+      assertEquals(Set.empty[Int], activeTaskPartitionsOf(rebalancedGroup, memberId2))
+      assertEquals(Set.empty[Int], activeTaskPartitionsOf(rebalancedGroup, memberId3))
+    } finally {
+      admin.close()
+    }
+  }
+
+  @ClusterTest(
+    serverProperties = Array(
+      // The class name has to be spelled out because annotation values must be compile-time constants.
+      new ClusterConfigProperty(
+        key = GroupCoordinatorConfig.STREAMS_GROUP_ASSIGNORS_CONFIG,
+        value = "sticky,kafka.server.FailingTaskAssignor"
+      ),
+      new ClusterConfigProperty(key = GroupCoordinatorConfig.STREAMS_GROUP_ASSIGNMENT_INTERVAL_MS_CONFIG, value = "0")
+    )
+  )
+  def testTaskAssignorExceptionLeavesTheTargetAssignmentUnchanged(): Unit = {
+    val admin = cluster.admin()
+    val groupId = "test-group"
+    val topicName = "test-topic"
+    val memberId1 = "test-member-1"
+    val memberId2 = "test-member-2"
+    val memberId3 = "test-member-3"
+
+    try {
+      createOffsetsTopicAndSourceTopic(admin, topicName)
+      val topology = createMockTopology(topicName)
+
+      // The group first stabilizes on the default assignor, so it has a target assignment to lose.
+      val responses = mutable.Map(
+        memberId1 -> joinStreamsGroup(groupId, memberId1, topology),
+        memberId2 -> joinStreamsGroup(groupId, memberId2, topology)
+      )
+      val stableGroup = heartbeatUntilGroupIsStable(groupId, responses)
+      val assignmentBefore = Map(
+        memberId1 -> activeTaskPartitionsOf(stableGroup, memberId1),
+        memberId2 -> activeTaskPartitionsOf(stableGroup, memberId2)
+      )
+
+      setStreamsAssignorName(admin, groupId, FailingTaskAssignor.NAME)
+      waitForGroupAssignorName(groupId, FailingTaskAssignor.NAME)
+
+      // The third member bumps the group epoch, so the coordinator recomputes the assignment and the
+      // assignor throws. The heartbeat that triggered the computation fails.
+      val failedResponse = streamsGroupHeartbeat(
+        groupId = groupId,
+        memberId = memberId3,
+        rebalanceTimeoutMs = 1000,
+        activeTasks = List.empty,
+        standbyTasks = List.empty,
+        warmupTasks = List.empty,
+        topology = topology,
+        expectedError = Errors.UNKNOWN_SERVER_ERROR
+      )
+      assertEquals(Errors.UNKNOWN_SERVER_ERROR.code(), failedResponse.errorCode())
+
+      // The failed computation is not persisted, so the members keep the assignment they already had.
+      val groupAfterFailure = streamsGroupDescribe(groupIds = List(groupId)).head
+      assertEquals(stableGroup.assignmentEpoch(), groupAfterFailure.assignmentEpoch())
+      assertEquals(assignmentBefore(memberId1), activeTaskPartitionsOf(groupAfterFailure, memberId1))
+      assertEquals(assignmentBefore(memberId2), activeTaskPartitionsOf(groupAfterFailure, memberId2))
+    } finally {
+      admin.close()
+    }
+  }
+
+  @ClusterTest(
     types = Array(Type.KRAFT),
     serverProperties = Array(
       new ClusterConfigProperty(key = "group.streams.heartbeat.interval.ms", value = "500"),
@@ -1362,6 +1521,103 @@ class StreamsGroupHeartbeatRequestTest(cluster: ClusterInstance) extends GroupCo
     }
   }
 
+  /**
+   * Creates the __consumer_offsets topic, which is not created automatically by tests that do not use the
+   * FindCoordinator API, and a three-partition source topic for the group's topology.
+   */
+  private def createOffsetsTopicAndSourceTopic(admin: Admin, topicName: String): Unit = {
+    TestUtils.createOffsetsTopicWithAdmin(
+      admin = admin,
+      brokers = cluster.brokers.values().asScala.toSeq,
+      controllers = cluster.controllers().values().asScala.toSeq
+    )
+    TestUtils.createTopicWithAdmin(
+      admin = admin,
+      brokers = cluster.brokers.values().asScala.toSeq,
+      controllers = cluster.controllers().values().asScala.toSeq,
+      topic = topicName,
+      numPartitions = 3
+    )
+    TestUtils.waitUntilTrue(() => {
+      admin.listTopics().names().get().contains(topicName)
+    }, msg = s"Topic $topicName is not available to the group coordinator")
+  }
+
+  private def setStreamsAssignorName(admin: Admin, groupId: String, assignorName: String): Unit = {
+    val alterOp = new AlterConfigOp(
+      new ConfigEntry(GroupConfig.STREAMS_ASSIGNOR_NAME_CONFIG, assignorName),
+      AlterConfigOp.OpType.SET
+    )
+    admin.incrementalAlterConfigs(
+      Map(new ConfigResource(ConfigResource.Type.GROUP, groupId) -> List(alterOp).asJavaCollection).asJava
+    ).all().get()
+  }
+
+  /**
+   * Waits until the coordinator itself reports the given assignor for the group. Group config propagation is
+   * asynchronous, and the describe response carries the assignor the coordinator would use next, so this is a
+   * stronger barrier than reading the config back with DescribeConfigs.
+   */
+  private def waitForGroupAssignorName(groupId: String, assignorName: String): Unit = {
+    TestUtils.waitUntilTrue(() => {
+      streamsGroupDescribe(groupIds = List(groupId)).head.assignorName() == assignorName
+    }, s"The coordinator did not pick up assignor '$assignorName' for group $groupId within the timeout period.")
+  }
+
+  private def joinStreamsGroup(
+    groupId: String,
+    memberId: String,
+    topology: StreamsGroupHeartbeatRequestData.Topology
+  ): StreamsGroupHeartbeatResponseData = {
+    streamsGroupHeartbeat(
+      groupId = groupId,
+      memberId = memberId,
+      rebalanceTimeoutMs = 1000,
+      activeTasks = List.empty,
+      standbyTasks = List.empty,
+      warmupTasks = List.empty,
+      topology = topology
+    )
+  }
+
+  /**
+   * Heartbeats on behalf of every member in `responses` until the group is stable with exactly those members,
+   * updating `responses` in place, and returns the group description at that point.
+   */
+  private def heartbeatUntilGroupIsStable(
+    groupId: String,
+    responses: mutable.Map[String, StreamsGroupHeartbeatResponseData]
+  ): StreamsGroupDescribeResponseData.DescribedGroup = {
+    var describedGroup: StreamsGroupDescribeResponseData.DescribedGroup = null
+    TestUtils.waitUntilTrue(() => {
+      responses.keys.toList.foreach { memberId =>
+        val previous = responses(memberId)
+        responses.put(memberId, streamsGroupHeartbeat(
+          groupId = groupId,
+          memberId = memberId,
+          memberEpoch = previous.memberEpoch(),
+          rebalanceTimeoutMs = 1000,
+          activeTasks = convertTaskIds(previous.activeTasks()),
+          standbyTasks = convertTaskIds(previous.standbyTasks()),
+          warmupTasks = convertTaskIds(previous.warmupTasks())
+        ))
+      }
+      describedGroup = streamsGroupDescribe(groupIds = List(groupId)).head
+      describedGroup.groupState() == "Stable" && describedGroup.members().size() == responses.size
+    }, s"Group $groupId did not stabilize with ${responses.size} members within the timeout period.")
+    describedGroup
+  }
+
+  private def activeTaskPartitionsOf(
+    describedGroup: StreamsGroupDescribeResponseData.DescribedGroup,
+    memberId: String
+  ): Set[Int] = {
+    val member = describedGroup.members().asScala
+      .find(_.memberId() == memberId)
+      .getOrElse(throw new AssertionError(s"Member $memberId is not part of group ${describedGroup.groupId()}"))
+    member.assignment().activeTasks().asScala.flatMap(_.partitions().asScala.map(_.intValue())).toSet
+  }
+
   private def convertTaskIds(responseTasks: java.util.List[StreamsGroupHeartbeatResponseData.TaskIds]): List[StreamsGroupHeartbeatRequestData.TaskIds] = {
     if (responseTasks == null) {
       List()
@@ -1420,4 +1676,52 @@ class CustomStreamsTaskAssignor extends TaskAssignor {
 
   override def assign(groupSpec: GroupSpec, topologyDescriber: TopologyDescriber): GroupAssignment =
     new GroupAssignment(java.util.Map.of[String, MemberAssignment]())
+}
+
+object AllTasksToFirstMemberAssignor {
+  val NAME = "all-to-first"
+}
+
+/**
+ * Assigns every active task to the lexicographically first member. The result is deliberately unbalanced
+ * so that an assignment computed by this assignor cannot be confused with one computed by the sticky assignor.
+ */
+class AllTasksToFirstMemberAssignor extends TaskAssignor {
+  override def name(): String = AllTasksToFirstMemberAssignor.NAME
+
+  override def assign(groupSpec: GroupSpec, topologyDescriber: TopologyDescriber): GroupAssignment = {
+    val memberIds: List[String] = groupSpec.memberIds().asScala.toList.sorted
+    if (memberIds.isEmpty) {
+      return new GroupAssignment(java.util.Map.of[String, MemberAssignment]())
+    }
+
+    val allActiveTasks = new java.util.HashMap[String, java.util.Set[Integer]]()
+    topologyDescriber.subtopologies().asScala.foreach { subtopologyId =>
+      val partitions: java.util.Set[Integer] =
+        (0 until topologyDescriber.maxNumInputPartitions(subtopologyId)).map(Integer.valueOf).toSet.asJava
+      allActiveTasks.put(subtopologyId, partitions)
+    }
+
+    val assignments = new java.util.HashMap[String, MemberAssignment]()
+    assignments.put(memberIds.head, new MemberAssignment(allActiveTasks, new java.util.HashMap()))
+    memberIds.tail.foreach { memberId =>
+      assignments.put(memberId, new MemberAssignment(new java.util.HashMap(), new java.util.HashMap()))
+    }
+    new GroupAssignment(assignments)
+  }
+}
+
+object FailingTaskAssignor {
+  val NAME = "failing"
+  val ERROR_MESSAGE = "Assignment failed."
+}
+
+/**
+ * Always throws, so that the coordinator's handling of a failed assignment can be exercised end-to-end.
+ */
+class FailingTaskAssignor extends TaskAssignor {
+  override def name(): String = FailingTaskAssignor.NAME
+
+  override def assign(groupSpec: GroupSpec, topologyDescriber: TopologyDescriber): GroupAssignment =
+    throw new TaskAssignorException(FailingTaskAssignor.ERROR_MESSAGE)
 }

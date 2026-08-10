@@ -1788,6 +1788,28 @@ class KafkaService(KafkaPathResolverMixin, JmxMixin, Service):
                 command_config)
         return "Completed" in self.run_cli_tool(node, cmd)
 
+    def set_streams_assignor_name(self, group, assignor_name, node=None, command_config=None):
+        """ Set the streams.assignor.name config (GroupConfig, per-group override) for the given streams group.
+        The name must be one that the broker registered from group.streams.assignors (KIP-1357).
+        """
+        if node is None:
+            node = self.nodes[0]
+        config_script = self.path.script("kafka-configs.sh", node)
+
+        if command_config is None:
+            command_config = ""
+        else:
+            command_config = "--command-config " + command_config
+
+        cmd = fix_opts_for_new_jvm(node)
+        cmd += "%s --bootstrap-server %s --group %s --alter --add-config \"streams.assignor.name=%s\" %s" % \
+               (config_script,
+                self.bootstrap_servers(self.security_protocol),
+                group,
+                assignor_name,
+                command_config)
+        return "Completed" in self.run_cli_tool(node, cmd)
+
     def set_share_group_delivery_count_limit(self, group, limit, node=None, command_config=None):
         """ Set the share.delivery.count.limit config (GroupConfig, per-group override) for the given share group.
         """
