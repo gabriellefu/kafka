@@ -24,27 +24,25 @@ import java.util.Collection;
 import java.util.List;
 
 /**
- * Picks the candidate tag groups for each standby of one task. A tag group meets the condition of a key of
- * {@code rack.aware.assignment.tags} when its value for the key is new to the task. Starting from the tag groups with
- * room, each key in list order narrows the candidates to those that meet its condition, or is given up if none would
- * be left; the assignor's tie-break then decides among them. Once every key is given up, the assignor's tag-blind
- * pass places the remaining standbys.
+ * Picks the candidate tag groups for each standby of one task. A tag group meets the condition of a tag key of
+ * {@code rack.aware.assignment.tags} when its value for the tag key is new to the task. Starting from the tag groups
+ * with room, each tag key in priority order narrows the candidates to those that meet its condition, or is given up if
+ * none would be left; the assignor's tie-break then decides among them. Once every tag key is given up, the assignor's
+ * tag-blind pass places the remaining standbys.
  * <p>
- * A {@link TagTree} records the values that the holders of the task carry and finds the least-loaded tag group with
- * room that meets a set of conditions without testing every tag group.
+ * A {@link TagTree} records the values that the holders of the task carry and finds, without testing every tag group,
+ * whether a tag group with room meets a set of conditions and the least-loaded process with room of those that do.
  * <p>
- * One picker per task, on the tree of the assignment: build it with the holders of the task, then per standby
- * {@link #pick()}, the assignor's choice by {@link #isCandidate(TagGroup)} or {@link #leastLoaded()}, and
- * {@link #markUsed(TagGroup)} for it.
+ * One picker per task, on the tree of the assignment: build it with the holders of the task, then per standby call
+ * {@link #pick()}, stopping once it returns no conditions; let the assignor choose among the candidates under them, by
+ * {@link #isCandidate(TagGroup, List)} or {@link #leastLoaded(List)}; and call {@link #markUsed(TagGroup)} for its
+ * choice.
  *
  * @param <P> The assignor's process type.
  */
 final class RackAwareStandbyPicker<P> {
 
     private final TagTree<P> tree;
-
-    // The keys whose condition holds in the last pick.
-    private List<TagKey> pickedConditions;
 
     /**
      * @param tree    The tag tree of the assignment, whose used values the picker resets for this task.
@@ -58,56 +56,64 @@ final class RackAwareStandbyPicker<P> {
         }
     }
 
-    /** Records the tag values of a new holder of the task, so that no later standby lands on them while a new value exists. */
+    /**
+     * Records the tag values of a new holder of the task, so that no later standby lands on them while a new value
+     * exists.
+     */
     void markUsed(final TagGroup<P> holder) {
         tree.markUsed(holder);
     }
 
-    /** Picks the candidates for the next standby, or returns false once no tag group can make the task more diverse. */
-    boolean pick() {
-        // A key whose values the holders all carry cannot make the task more diverse.
-        final List<TagKey> keysWithNewValue = new ArrayList<>();
-        for (final TagKey key : tree.keys()) {
-            if (tree.hasUnusedValue(key)) {
-                keysWithNewValue.add(key);
+    /**
+     * The conditions for the next standby: the tag keys for which a candidate must have a value new to the task, met by
+     * at least one tag group with room. Empty once no tag group with room can make the task more diverse.
+     */
+    List<TagKey> pick() {
+        // Only if a tag key has an unused value is it possible to choose a process that makes the task more diverse
+        // in this tag key.
+        final List<TagKey> tagKeysWithUnusedValue = new ArrayList<>();
+        for (final TagKey tagKey : tree.tagKeys()) {
+            if (tree.hasUnusedValue(tagKey)) {
+                tagKeysWithUnusedValue.add(tagKey);
             }
         }
-        if (keysWithNewValue.isEmpty()) {
-            return false;
+        if (tagKeysWithUnusedValue.isEmpty()) {
+            return List.of();
         }
         tree.startPick();
-        if (!tree.hasRoom()) {
-            return false;
+        // No tag group has room for the standby; with no conditions, only room counts.
+        if (!tree.hasTagGroupMeeting(List.of())) {
+            return List.of();
         }
 
-        // Most picks find a tag group with room that meets the condition of every such key.
-        List<TagKey> conditions = keysWithNewValue;
+        // Most picks find a tag group with room that meets the condition of every such tag key.
+        List<TagKey> conditions = tagKeysWithUnusedValue;
         if (!tree.hasTagGroupMeeting(conditions)) {
-            // Otherwise the keys are added in priority order, giving up each one that would leave no tag group.
+            // Otherwise the tag keys are added in priority order; a tag key is given up when no tag group with room
+            // meets it together with the tag keys kept so far.
             conditions = new ArrayList<>();
-            for (final TagKey key : keysWithNewValue) {
-                final List<TagKey> withKey = new ArrayList<>(conditions);
-                withKey.add(key);
-                // With every key, the query above already found no tag group.
-                if (withKey.size() < keysWithNewValue.size() && tree.hasTagGroupMeeting(withKey)) {
-                    conditions = withKey;
+            for (final TagKey tagKey : tagKeysWithUnusedValue) {
+                final List<TagKey> withTagKey = new ArrayList<>(conditions);
+                withTagKey.add(tagKey);
+                // If withTagKey holds every tag key, the query above already found no tag group for it.
+                if (withTagKey.size() < tagKeysWithUnusedValue.size() && tree.hasTagGroupMeeting(withTagKey)) {
+                    conditions = withTagKey;
                 }
             }
-            if (conditions.isEmpty()) {
-                return false;
-            }
         }
-        pickedConditions = conditions;
-        return true;
+        return conditions;
     }
 
-    /** Whether a tag group is one of the candidates of the last pick. */
-    boolean isCandidate(final TagGroup<P> tagGroup) {
-        return tree.meetsConditions(tagGroup, pickedConditions) && tagGroup.hasRoom();
+    /** Whether a tag group is a candidate under the conditions of a pick: it meets them and has room. */
+    boolean isCandidate(final TagGroup<P> tagGroup, final List<TagKey> conditions) {
+        return tree.tagGroupMeeting(tagGroup, conditions) && tagGroup.hasRoom();
     }
 
-    /** The least-loaded process with room of the candidates of the last pick; call it before placing the standby. */
-    P leastLoaded() {
-        return tree.leastLoadedMeeting(pickedConditions).process;
+    /**
+     * The least-loaded process with room of the candidates under the conditions of the last {@link #pick()}, of which
+     * there is at least one; call this before placing the standby, which changes loads.
+     */
+    P leastLoaded(final List<TagKey> conditions) {
+        return tree.leastLoadedProcessMeeting(conditions).process;
     }
 }

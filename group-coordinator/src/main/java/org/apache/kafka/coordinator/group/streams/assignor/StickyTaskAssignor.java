@@ -638,15 +638,15 @@ public class StickyTaskAssignor implements TaskAssignor {
         }
         final RackAwareStandbyPicker<ProcessState> picker = new RackAwareStandbyPicker<>(tagTree, holders);
 
-        final Predicate<ProcessState> inCandidates = process -> picker.isCandidate(localState.identicalTagGroups.tagGroupOf(process));
-
         final List<ProcessState> placed = new ArrayList<>();
         while (alreadyPlaced.size() + placed.size() < localState.numStandbyReplicas) {
-            if (!picker.pick()) {
+            final List<TagTree.TagKey> conditions = picker.pick();
+            if (conditions.isEmpty()) {
                 break;
             }
 
             // prev active or standby member in a candidate tag group
+            final Predicate<ProcessState> inCandidates = process -> picker.isCandidate(localState.identicalTagGroups.tagGroupOf(process), conditions);
             final Member prevMember = hasPrevMember ? findPrevMemberForStandby(localState, task, inCandidates) : null;
             if (prevMember != null) {
                 placeRackAwareStandby(localState, picker, localState.processIdToState.get(prevMember.processId), prevMember.memberId, task, placed);
@@ -658,7 +658,7 @@ public class StickyTaskAssignor implements TaskAssignor {
                 break;
             }
 
-            final ProcessState processWithLeastLoad = picker.leastLoaded();
+            final ProcessState processWithLeastLoad = picker.leastLoaded(conditions);
             placeRackAwareStandby(localState, picker, processWithLeastLoad, leastLoadedMemberWithRoom(localState, processWithLeastLoad), task, placed);
         }
         return placed;

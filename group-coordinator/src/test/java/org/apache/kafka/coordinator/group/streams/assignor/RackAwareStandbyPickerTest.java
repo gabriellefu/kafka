@@ -35,6 +35,8 @@ public class RackAwareStandbyPickerTest {
     private IdenticalTagGroups<String> identicalTagGroups;
     private TagTree<String> tagTree;
     private RackAwareStandbyPicker<String> picker;
+    // The conditions of the last pick by candidates().
+    private List<TagTree.TagKey> conditions;
 
     @Test
     public void shouldOnlyPickEligibleProcessesWithNewValueForPriorityKey() {
@@ -66,7 +68,7 @@ public class RackAwareStandbyPickerTest {
         hold("H");
 
         assertEquals(Set.of("X", "Z"), candidates());
-        assertEquals("Z", picker.leastLoaded());
+        assertEquals("Z", picker.leastLoaded(conditions));
     }
 
     @Test
@@ -154,11 +156,11 @@ public class RackAwareStandbyPickerTest {
         ));
         hold("H");
         assertEquals(Set.of("X", "Y"), candidates());
-        assertEquals("X", picker.leastLoaded());
+        assertEquals("X", picker.leastLoaded(conditions));
 
         loads.put("X", 3.0);
         assertEquals(Set.of("X", "Y"), candidates());
-        assertEquals("Y", picker.leastLoaded());
+        assertEquals("Y", picker.leastLoaded(conditions));
     }
 
     private void picker(final List<String> tagKeys, final Map<String, Map<String, String>> clientTags) {
@@ -181,10 +183,11 @@ public class RackAwareStandbyPickerTest {
 
     /** The processes of the candidate tag groups of a new pick, empty when nothing is picked. */
     private Set<String> candidates() {
+        conditions = picker.pick();
         final Set<String> candidates = new HashSet<>();
-        if (picker.pick()) {
+        if (!conditions.isEmpty()) {
             for (final String process : processes) {
-                if (picker.isCandidate(identicalTagGroups.tagGroupOf(process))) {
+                if (picker.isCandidate(identicalTagGroups.tagGroupOf(process), conditions)) {
                     candidates.add(process);
                 }
             }

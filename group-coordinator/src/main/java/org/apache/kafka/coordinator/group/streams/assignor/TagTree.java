@@ -35,18 +35,20 @@ import java.util.PriorityQueue;
  * such as {@code cluster}, and its values are the values it takes on the processes, such as {@code c1}. The tree has
  * one level per key, ordered by the number of values of the key, fewest on top.
  * <p>
- * The tree records the values that the holders of the task being placed carry, and a missing value always counts as
- * used. Every inner node queues its children by the least-loaded process with room below them and knows the values
- * below it, so a query for the tag groups whose values for some keys are all unused takes the children in queue order:
- * it skips a child whose own value is used, takes the least-loaded process of one with no used value below, walks into
- * the others, and stops once the next child cannot beat the best found, or at the first found when any such tag group
- * will do. Loads must only grow and room only shrink.
+ * The tree records the values that the holders of the task being placed carry; a missing value always counts as used.
+ * Every inner node knows the values below it and queues its children by the least-loaded process with room below them.
+ * A query for the tag groups whose values for some keys, the conditions, are all unused takes the children in queue
+ * order: it skips a child whose own value fails a condition, takes the least-loaded process of a child whose values
+ * below all meet them, and walks into the others. It stops at the first such tag group when any will do, or once the
+ * next child cannot beat the best found. Loads must only grow and room only shrink: a queued process may then be
+ * stale, but only lighter than the current one, and a child without room can be dropped for good.
  * Each assignor sets what room is when it builds the {@link IdenticalTagGroups}; without a limit, every process has
  * room.
  * <p>
  * Inside the tree, the index of a key is its position in {@code rack.aware.assignment.tags}, the index of a value
- * comes from a map per key, and the index after the last value stands for a missing value. A set of keys is an int
- * whose bit k stands for the key with index k. Callers only see a key as a {@link TagKey}.
+ * comes from a map per key, and the index after the last value stands for a missing value. A set of keys, such as the
+ * conditions of a query, is an int with bit k set for the key with index k. Callers only see a key as a
+ * {@link TagKey}.
  *
  * @param <P> The assignor's process type.
  */
@@ -56,10 +58,14 @@ final class TagTree<P> {
     private final List<TagKey> keys;
     // Per key index, the number of values.
     private final int[] numValues;
+    // Per level from the top, the index of its key. The priority of a key is still its order in
+    // rack.aware.assignment.tags, not this one.
+    private final int[] tagKeysInTreeOrder;
     private final Map<TagGroup<P>, Node<P>> leafByTagGroup;
     private final Node<P> root;
 
-    // Per key index, the value indexes the holders of the task carry, cleared by clearUsedValues.
+    // Per key index, one bit per value index, set once a holder of the task carries that value.
+    // Cleared by clearUsedValues.
     private final BitSet[] usedValues;
     // The nodes with a cached least-loaded process, to clear on startPick: loads do not change during a pick.
     private final List<Node<P>> cachedNodes = new ArrayList<>();
@@ -71,62 +77,70 @@ final class TagTree<P> {
     TagTree(final List<String> tagKeys, final Collection<TagGroup<P>> tagGroups) {
         // One level per tag key, so this is also the number of tag keys.
         final int treeHeight = tagKeys.size();
-        // The value indexes of each tag group, in the order the values first appear; -1 for a missing value for now.
-        final List<Map<String, Integer>> valueIndexOf = new ArrayList<>(treeHeight);
-        for (int keyIndex = 0; keyIndex < treeHeight; keyIndex++) {
-            valueIndexOf.add(new HashMap<>());
-        }
-        final List<int[]> valueIndexesOfTagGroups = new ArrayList<>(tagGroups.size());
-        for (final TagGroup<P> tagGroup : tagGroups) {
-            final int[] valueIndexes = new int[treeHeight];
-            for (int keyIndex = 0; keyIndex < treeHeight; keyIndex++) {
-                final String value = tagGroup.clientTags().get(tagKeys.get(keyIndex));
-                final Map<String, Integer> indexOfValue = valueIndexOf.get(keyIndex);
-                valueIndexes[keyIndex] = value == null ? -1 : indexOfValue.computeIfAbsent(value, v -> indexOfValue.size());
-            }
-            valueIndexesOfTagGroups.add(valueIndexes);
-        }
+        final List<Map<String, Integer>> indexOfValues = indexValues(tagKeys, tagGroups);
 
-        // The number of values of each key.
-        numValues = new int[treeHeight];
-        for (int keyIndex = 0; keyIndex < treeHeight; keyIndex++) {
-            numValues[keyIndex] = valueIndexOf.get(keyIndex).size();
-        }
-        // The keys, with no value used yet.
+        // The keys and the number of values of each, with no value used yet.
         keys = new ArrayList<>(treeHeight);
+        numValues = new int[treeHeight];
         usedValues = new BitSet[treeHeight];
         for (int keyIndex = 0; keyIndex < treeHeight; keyIndex++) {
             keys.add(new TagKey(tagKeys.get(keyIndex), keyIndex));
+            numValues[keyIndex] = indexOfValues.get(keyIndex).size();
             usedValues[keyIndex] = new BitSet(numValues[keyIndex] + 1);
         }
-        // The tag keys from the top level down. Their priority is their order in rack.aware.assignment.tags, not this one.
-        final int[] tagKeysInTreeOrder = tagKeysInTreeOrder(numValues);
+        tagKeysInTreeOrder = tagKeysInTreeOrder(numValues);
 
         root = new Node<>(-1, -1, treeHeight, false);
         leafByTagGroup = new HashMap<>();
-        int index = 0;
         for (final TagGroup<P> tagGroup : tagGroups) {
-            final int[] valueIndexes = valueIndexesOfTagGroups.get(index++);
-            Node<P> node = root;
-            for (int level = 0; level < treeHeight; level++) {
-                final int keyIndex = tagKeysInTreeOrder[level];
-                if (valueIndexes[keyIndex] < 0) {
-                    valueIndexes[keyIndex] = missingValueIndex(keyIndex);
-                }
-                final int valueIndex = valueIndexes[keyIndex];
-                Node<P> child = node.childrenByValueIndex.get(valueIndex);
-                if (child == null) {
-                    child = new Node<>(keyIndex, valueIndex, treeHeight, level == treeHeight - 1);
-                    node.childrenByValueIndex.put(valueIndex, child);
-                }
-                node = child;
-            }
-            node.tagGroup = tagGroup;
-            node.valueIndexes = valueIndexes;
-            leafByTagGroup.put(tagGroup, node);
+            insert(tagGroup, valueIndexes(tagGroup, tagKeys, indexOfValues));
         }
-        buildQueues(root);
-        collectValuesBelow(root);
+        buildInnerNodes(root);
+    }
+
+    /** Per key, the index of each of its values, in the order the values first appear on the tag groups. */
+    private static <P> List<Map<String, Integer>> indexValues(final List<String> tagKeys, final Collection<TagGroup<P>> tagGroups) {
+        final List<Map<String, Integer>> indexOfValues = new ArrayList<>(tagKeys.size());
+        for (final String tagKey : tagKeys) {
+            final Map<String, Integer> indexOfValue = new HashMap<>();
+            for (final TagGroup<P> tagGroup : tagGroups) {
+                final String value = tagGroup.clientTags().get(tagKey);
+                if (value != null) {
+                    indexOfValue.putIfAbsent(value, indexOfValue.size());
+                }
+            }
+            indexOfValues.add(indexOfValue);
+        }
+        return indexOfValues;
+    }
+
+    /** The value index of the tag group for each key, the missing value's index for a key it has no value for. */
+    private int[] valueIndexes(final TagGroup<P> tagGroup, final List<String> tagKeys, final List<Map<String, Integer>> indexOfValues) {
+        final int[] valueIndexes = new int[tagKeys.size()];
+        for (int keyIndex = 0; keyIndex < valueIndexes.length; keyIndex++) {
+            final String value = tagGroup.clientTags().get(tagKeys.get(keyIndex));
+            valueIndexes[keyIndex] = indexOfValues.get(keyIndex).getOrDefault(value, missingValueIndex(keyIndex));
+        }
+        return valueIndexes;
+    }
+
+    /** Adds the tag group as a leaf, creating the inner nodes on its path. */
+    private void insert(final TagGroup<P> tagGroup, final int[] valueIndexes) {
+        final int treeHeight = tagKeysInTreeOrder.length;
+        Node<P> node = root;
+        for (int level = 0; level < treeHeight; level++) {
+            final int keyIndex = tagKeysInTreeOrder[level];
+            final int valueIndex = valueIndexes[keyIndex];
+            Node<P> child = node.childrenByValueIndex.get(valueIndex);
+            if (child == null) {
+                child = new Node<>(keyIndex, valueIndex, treeHeight, level == treeHeight - 1);
+                node.childrenByValueIndex.put(valueIndex, child);
+            }
+            node = child;
+        }
+        node.tagGroup = tagGroup;
+        node.valueIndexes = valueIndexes;
+        leafByTagGroup.put(tagGroup, node);
     }
 
     /**
@@ -150,14 +164,25 @@ final class TagTree<P> {
         return tagKeysInTreeOrder;
     }
 
-    /** Queues the children of the node and of every inner node below it by their least-loaded process with room. */
-    private void buildQueues(final Node<P> node) {
+    /**
+     * Collects the values below the node and queues its children by their least-loaded process with room, for the node
+     * and every inner node under it.
+     */
+    private void buildInnerNodes(final Node<P> node) {
         if (node.tagGroup != null) {
             return;
         }
         for (final Node<P> child : node.childrenByValueIndex.values()) {
-            buildQueues(child);
-            final QueuedProcess<P> childLeastLoaded = leastLoadedBelow(child);
+            buildInnerNodes(child);
+            // The child's own value, then the values below it.
+            node.valuesBelowOf(child.keyIndex).set(child.valueIndex);
+            for (int keyIndex = 0; keyIndex < child.valuesBelow.length; keyIndex++) {
+                if (child.valuesBelow[keyIndex] != null) {
+                    node.valuesBelowOf(keyIndex).or(child.valuesBelow[keyIndex]);
+                }
+            }
+            // A child without room below never gets room again, so it is not queued.
+            final QueuedProcess<P> childLeastLoaded = leastLoadedProcessBelow(child);
             if (childLeastLoaded != null) {
                 child.queuedLoad = childLeastLoaded.load;
                 child.queuedProcessIndex = childLeastLoaded.processIndex;
@@ -166,24 +191,8 @@ final class TagTree<P> {
         }
     }
 
-    /** Collects the values below the node and below every inner node under it. */
-    private void collectValuesBelow(final Node<P> node) {
-        if (node.tagGroup != null) {
-            return;
-        }
-        for (final Node<P> child : node.childrenByValueIndex.values()) {
-            collectValuesBelow(child);
-            node.valuesBelowOf(child.keyIndex).set(child.valueIndex);
-            for (int keyIndex = 0; keyIndex < child.valuesBelow.length; keyIndex++) {
-                if (child.valuesBelow[keyIndex] != null) {
-                    node.valuesBelowOf(keyIndex).or(child.valuesBelow[keyIndex]);
-                }
-            }
-        }
-    }
-
-    /** The keys of {@code rack.aware.assignment.tags}, in their order. */
-    List<TagKey> keys() {
+    /** The tag keys in priority order: that of {@code rack.aware.assignment.tags}, not of the levels. */
+    List<TagKey> tagKeys() {
         return keys;
     }
 
@@ -209,7 +218,7 @@ final class TagTree<P> {
     }
 
     /** Whether the values of the tag group for {@code conditionKeys} are all unused. */
-    boolean meetsConditions(final TagGroup<P> tagGroup, final List<TagKey> conditionKeys) {
+    boolean tagGroupMeeting(final TagGroup<P> tagGroup, final List<TagKey> conditionKeys) {
         final int[] valueIndexes = leafByTagGroup.get(tagGroup).valueIndexes;
         for (final TagKey key : conditionKeys) {
             if (valueUsed(key.index, valueIndexes[key.index])) {
@@ -237,24 +246,20 @@ final class TagTree<P> {
         cachedNodes.clear();
     }
 
-    /** Whether a process of some tag group has room; called after startPick. */
-    boolean hasRoom() {
-        return leastLoadedBelow(root) != null;
-    }
-
     /** Whether a tag group with room has values for {@code conditionKeys} that are all unused. */
     boolean hasTagGroupMeeting(final List<TagKey> conditionKeys) {
-        return hasTagGroupMeeting(root, keyBits(conditionKeys));
+        return hasTagGroupBelowMeeting(root, keyBits(conditionKeys));
     }
 
     /**
      * The least-loaded process with room in a tag group whose values for {@code conditionKeys} are all unused, or null
      * if none.
      */
-    QueuedProcess<P> leastLoadedMeeting(final List<TagKey> conditionKeys) {
-        return leastLoadedMeeting(root, keyBits(conditionKeys));
+    QueuedProcess<P> leastLoadedProcessMeeting(final List<TagKey> conditionKeys) {
+        return leastLoadedProcessBelowMeeting(root, keyBits(conditionKeys));
     }
 
+    /** The keys as an int with bit k set for the key with index k. */
     private static int keyBits(final List<TagKey> keys) {
         int keyBits = 0;
         for (final TagKey key : keys) {
@@ -265,18 +270,16 @@ final class TagTree<P> {
 
     /**
      * Whether a tag group with room below the node has values for {@code conditionKeys} that are all unused; the node's
-     * own value and those above it are unused.
+     * own value and those above it meet the conditions.
      */
-    private boolean hasTagGroupMeeting(final Node<P> node, final int conditionKeys) {
-        if (!hasUsedValueBelow(node, conditionKeys)) {
-            return leastLoadedBelow(node) != null;
+    private boolean hasTagGroupBelowMeeting(final Node<P> node, final int conditionKeys) {
+        if (valuesBelowAllMeeting(node, conditionKeys)) {
+            return leastLoadedProcessBelow(node) != null;
         }
         // The children in queue order, until one has such a tag group.
         boolean found = false;
-        while (!found && leastLoadedOfChildren(node, conditionKeys, null) != null) {
-            final Node<P> child = node.childrenByLeastLoaded.poll();
-            node.setAsideChildren.add(child);
-            found = hasTagGroupMeeting(child, conditionKeys);
+        while (!found && nextChildMeeting(node, conditionKeys, null) != null) {
+            found = hasTagGroupBelowMeeting(setAsideHead(node), conditionKeys);
         }
         putBackSetAsideChildren(node);
         return found;
@@ -284,21 +287,26 @@ final class TagTree<P> {
 
     /**
      * The least-loaded process with room below the node in a tag group whose values for {@code conditionKeys} are all
-     * unused; the node's own value and those above it are unused.
+     * unused; the node's own value and those above it meet the conditions.
      */
-    private QueuedProcess<P> leastLoadedMeeting(final Node<P> node, final int conditionKeys) {
-        if (!hasUsedValueBelow(node, conditionKeys)) {
-            return leastLoadedBelow(node);
+    private QueuedProcess<P> leastLoadedProcessBelowMeeting(final Node<P> node, final int conditionKeys) {
+        if (valuesBelowAllMeeting(node, conditionKeys)) {
+            return leastLoadedProcessBelow(node);
         }
         // The children in queue order, until the next one cannot beat the best found.
         QueuedProcess<P> leastLoaded = null;
-        while (leastLoadedOfChildren(node, conditionKeys, leastLoaded) != null) {
-            final Node<P> child = node.childrenByLeastLoaded.poll();
-            node.setAsideChildren.add(child);
-            leastLoaded = lessLoaded(leastLoaded, leastLoadedMeeting(child, conditionKeys));
+        while (nextChildMeeting(node, conditionKeys, leastLoaded) != null) {
+            leastLoaded = lessLoaded(leastLoaded, leastLoadedProcessBelowMeeting(setAsideHead(node), conditionKeys));
         }
         putBackSetAsideChildren(node);
         return leastLoaded;
+    }
+
+    /** Takes the child at the head of the node's queue out of it until {@link #putBackSetAsideChildren(Node)}. */
+    private Node<P> setAsideHead(final Node<P> node) {
+        final Node<P> head = node.childrenByLeastLoaded.poll();
+        node.setAsideChildren.add(head);
+        return head;
     }
 
     /**
@@ -310,13 +318,16 @@ final class TagTree<P> {
         node.setAsideChildren.clear();
     }
 
-    /** Whether the node's own value is used for one of {@code conditionKeys}. */
-    private boolean ownValueUsed(final Node<P> node, final int conditionKeys) {
-        return (conditionKeys & 1 << node.keyIndex) != 0 && valueUsed(node.keyIndex, node.valueIndex);
+    /** Whether the node's own value meets {@code conditionKeys}: its key is not one of them, or its value is unused. */
+    private boolean ownValueMeeting(final Node<P> node, final int conditionKeys) {
+        return (conditionKeys & 1 << node.keyIndex) == 0 || !valueUsed(node.keyIndex, node.valueIndex);
     }
 
-    /** Whether a node below the node has a used value for one of {@code conditionKeys}, a missing one included. */
-    private boolean hasUsedValueBelow(final Node<P> node, final int conditionKeys) {
+    /**
+     * Whether, for every key of {@code conditionKeys}, no value below the node is used or missing: every tag group
+     * below the node then meets the conditions, given that the node's own value and those above it do.
+     */
+    private boolean valuesBelowAllMeeting(final Node<P> node, final int conditionKeys) {
         // One key of conditionKeys at a time, lowest bit first.
         for (int keyBits = conditionKeys; keyBits != 0; keyBits &= keyBits - 1) {
             final int keyIndex = Integer.numberOfTrailingZeros(keyBits);
@@ -325,18 +336,22 @@ final class TagTree<P> {
                 continue;
             }
             if (valuesBelow.get(missingValueIndex(keyIndex)) || valuesBelow.intersects(usedValues[keyIndex])) {
-                return true;
+                return false;
             }
         }
-        return false;
+        return true;
     }
 
     /** The least-loaded process with room below the node, or null if none; computed once per pick. */
-    private QueuedProcess<P> leastLoadedBelow(final Node<P> node) {
+    private QueuedProcess<P> leastLoadedProcessBelow(final Node<P> node) {
         if (!node.cached) {
-            node.cachedLeastLoaded = node.tagGroup != null
-                ? node.tagGroup.leastLoadedWithRoom()
-                : leastLoadedOfChildren(node, 0, null);
+            if (node.tagGroup != null) {
+                node.cachedLeastLoaded = node.tagGroup.leastLoadedWithRoom();
+            } else {
+                // With no conditions, the next child is the one with the least-loaded process below it.
+                final Node<P> head = nextChildMeeting(node, 0, null);
+                node.cachedLeastLoaded = head == null ? null : leastLoadedProcessBelow(head);
+            }
             node.cached = true;
             cachedNodes.add(node);
         }
@@ -344,32 +359,35 @@ final class TagTree<P> {
     }
 
     /**
-     * The least-loaded process with room below the child at the head of the node's queue, or null if no child has one,
-     * or once the head is queued with a process no lighter than {@code bound}: a child is never queued with a process
-     * heavier than its current one, so no child can then beat {@code bound}. A child whose own value is used for
-     * {@code conditionKeys} is set aside first, without looking below it; a stale child is queued again, one without
-     * room dropped.
+     * Brings the next child to walk into to the head of the node's queue and returns it, leaving it there: one with
+     * room whose own value meets {@code conditionKeys}, queued with its current least-loaded process. The tag groups
+     * below it may still fail a condition further down. Null once no child is left or none can beat {@code bound}, the
+     * best found so far.
      */
-    private QueuedProcess<P> leastLoadedOfChildren(final Node<P> node, final int conditionKeys, final QueuedProcess<P> bound) {
+    private Node<P> nextChildMeeting(final Node<P> node, final int conditionKeys, final QueuedProcess<P> bound) {
         while (!node.childrenByLeastLoaded.isEmpty()) {
             final Node<P> child = node.childrenByLeastLoaded.peek();
+            // The process a child is queued with may be stale, but a stale one is only lighter than its current one.
             if (bound != null && !queuedLighter(child, bound)) {
                 return null;
             }
-            if (ownValueUsed(child, conditionKeys)) {
-                node.setAsideChildren.add(node.childrenByLeastLoaded.poll());
+            // Every tag group below carries its own value, so none meets the conditions: set it aside for this query.
+            if (!ownValueMeeting(child, conditionKeys)) {
+                setAsideHead(node);
                 continue;
             }
-            final QueuedProcess<P> childLeastLoaded = leastLoadedBelow(child);
+            final QueuedProcess<P> childLeastLoaded = leastLoadedProcessBelow(child);
             if (childLeastLoaded == null) {
+                // No room below, and room only shrinks: drop it for good.
                 node.childrenByLeastLoaded.poll();
             } else if (childLeastLoaded.load != child.queuedLoad || childLeastLoaded.processIndex != child.queuedProcessIndex) {
+                // Queued with a stale process: requeue it with the current one.
                 node.childrenByLeastLoaded.poll();
                 child.queuedLoad = childLeastLoaded.load;
                 child.queuedProcessIndex = childLeastLoaded.processIndex;
                 node.childrenByLeastLoaded.add(child);
             } else {
-                return childLeastLoaded;
+                return child;
             }
         }
         return null;
@@ -381,6 +399,7 @@ final class TagTree<P> {
         return byLoad != 0 ? byLoad < 0 : child.queuedProcessIndex < process.processIndex;
     }
 
+    /** The lighter of the two by {@link QueuedProcess#ORDER}; a null one loses. */
     private static <P> QueuedProcess<P> lessLoaded(final QueuedProcess<P> process1, final QueuedProcess<P> process2) {
         if (process1 == null) {
             return process2;
@@ -413,17 +432,18 @@ final class TagTree<P> {
         // The key index and value index of the node's own value, -1 for the root.
         private final int keyIndex;
         private final int valueIndex;
-        // Per key index, the value indexes of the nodes below this one, null for a key with none.
+        // Per key index, the value indexes of the nodes below this one, not its own; null for a key with none.
         private final BitSet[] valuesBelow;
-        // Inner nodes only: the children by their value index, the children with room by the least-loaded process they
-        // are queued with, and the ones a query took out of that queue, put back before the query leaves this node.
+        // Inner nodes only: the children by their value index.
         private final Map<Integer, Node<P>> childrenByValueIndex;
+        // Inner nodes only: the children with room, by the least-loaded process they are queued with.
         private final PriorityQueue<Node<P>> childrenByLeastLoaded;
+        // Inner nodes only: the children a query took out of the queue, put back before the query leaves this node.
         private final List<Node<P>> setAsideChildren;
         // Leaves only.
         private TagGroup<P> tagGroup;
         private int[] valueIndexes;
-        // The least-loaded process this node is queued with in its parent.
+        // The least-loaded process below this node when it was last queued in its parent; a stale one is only lighter.
         private double queuedLoad;
         private int queuedProcessIndex;
         // Set once the head of the queue is current: cachedLeastLoaded is then the least-loaded process with room below
