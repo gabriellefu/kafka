@@ -1440,7 +1440,7 @@ public abstract class AbstractCoordinator implements Closeable {
                     // if no rebalance is ever triggered, we just return -1.
                     return -1d;
                 else
-                    return TimeUnit.SECONDS.convert(now - lastRebalanceEndMs, TimeUnit.MILLISECONDS);
+                    return TimeUnit.MILLISECONDS.toSeconds(now - lastRebalanceEndMs);
             };
             metrics.addMetric(metrics.metricName("last-rebalance-seconds-ago",
                 this.metricGrpName,
@@ -1452,7 +1452,7 @@ public abstract class AbstractCoordinator implements Closeable {
                     // if no heartbeat is ever triggered, just return -1.
                     return -1d;
                 else
-                    return TimeUnit.SECONDS.convert(now - heartbeat.lastHeartbeatSend(), TimeUnit.MILLISECONDS);
+                    return TimeUnit.MILLISECONDS.toSeconds(now - heartbeat.lastHeartbeatSend());
             };
             metrics.addMetric(metrics.metricName("last-heartbeat-seconds-ago",
                 this.metricGrpName,

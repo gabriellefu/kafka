@@ -74,8 +74,6 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
-import static java.util.concurrent.TimeUnit.NANOSECONDS;
-
 
 /**
  * The ClusterControlManager manages all the hard state associated with the Kafka cluster.
@@ -83,7 +81,7 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
  * brokers being fenced or unfenced, and broker feature versions.
  */
 public class ClusterControlManager {
-    static final long DEFAULT_SESSION_TIMEOUT_NS = NANOSECONDS.convert(9, TimeUnit.SECONDS);
+    static final long DEFAULT_SESSION_TIMEOUT_NS = TimeUnit.SECONDS.toNanos(9);
 
     static class Builder {
         private LogContext logContext = null;

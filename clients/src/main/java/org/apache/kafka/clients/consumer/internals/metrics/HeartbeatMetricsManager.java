@@ -68,7 +68,7 @@ public class HeartbeatMetricsManager extends AbstractConsumerMetricsManager {
                 // if no heartbeat is ever triggered, just return -1.
                 return -1d;
             else
-                return TimeUnit.SECONDS.convert(now - lastHeartbeatSend, TimeUnit.MILLISECONDS);
+                return TimeUnit.MILLISECONDS.toSeconds(now - lastHeartbeatSend);
         };
         lastHeartbeatSecondsAgo = metrics.metricName("last-heartbeat-seconds-ago",
             metricGroupName,

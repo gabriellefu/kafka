@@ -42,7 +42,7 @@ public class MetricConfig {
         this.quota = null;
         this.samples = DEFAULT_NUM_SAMPLES;
         this.eventWindow = Long.MAX_VALUE;
-        this.timeWindowMs = TimeUnit.MILLISECONDS.convert(30, TimeUnit.SECONDS);
+        this.timeWindowMs = TimeUnit.SECONDS.toMillis(30);
         this.tags = new LinkedHashMap<>();
         this.recordingLevel = Sensor.RecordingLevel.INFO;
     }
@@ -70,7 +70,7 @@ public class MetricConfig {
     }
 
     public MetricConfig timeWindow(long window, TimeUnit unit) {
-        this.timeWindowMs = TimeUnit.MILLISECONDS.convert(window, unit);
+        this.timeWindowMs = unit.toMillis(window);
         return this;
     }
 

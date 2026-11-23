@@ -39,8 +39,6 @@ import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-import static java.util.concurrent.TimeUnit.NANOSECONDS;
-
 public class QuorumControllerTestEnv implements AutoCloseable {
     private final List<QuorumController> controllers;
     private final MockRaftClientTestEnv clientEnv;
@@ -116,7 +114,7 @@ public class QuorumControllerTestEnv implements AutoCloseable {
                 builder.setLeaderImbalanceCheckIntervalNs(leaderImbalanceCheckIntervalNs);
                 builder.setQuorumFeatures(new QuorumFeatures(nodeId, QuorumFeatures.defaultSupportedFeatureMap(true), () -> nodeIds));
                 sessionTimeoutMillis.ifPresent(timeout ->
-                    builder.setSessionTimeoutNs(NANOSECONDS.convert(timeout, TimeUnit.MILLISECONDS))
+                    builder.setSessionTimeoutNs(TimeUnit.MILLISECONDS.toNanos(timeout))
                 );
                 MockFaultHandler fatalFaultHandler = new MockFaultHandler("fatalFaultHandler");
                 builder.setFatalFaultHandler(fatalFaultHandler);

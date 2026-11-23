@@ -229,7 +229,7 @@ class ControllerServer(
 
       val controllerBuilder = {
         val leaderImbalanceCheckIntervalNs = if (config.autoLeaderRebalanceEnable) {
-          OptionalLong.of(TimeUnit.NANOSECONDS.convert(config.leaderImbalanceCheckIntervalSeconds, TimeUnit.SECONDS))
+          OptionalLong.of(TimeUnit.SECONDS.toNanos(config.leaderImbalanceCheckIntervalSeconds))
         } else {
           OptionalLong.empty()
         }
@@ -244,8 +244,7 @@ class ControllerServer(
           setQuorumFeatures(quorumFeatures).
           setDefaultReplicationFactor(config.defaultReplicationFactor.toShort).
           setDefaultNumPartitions(config.numPartitions.intValue()).
-          setSessionTimeoutNs(TimeUnit.NANOSECONDS.convert(config.brokerSessionTimeoutMs.longValue(),
-            TimeUnit.MILLISECONDS)).
+          setSessionTimeoutNs(TimeUnit.MILLISECONDS.toNanos(config.brokerSessionTimeoutMs.longValue())).
           setLeaderImbalanceCheckIntervalNs(leaderImbalanceCheckIntervalNs).
           setMaxIdleIntervalNs(config.metadataMaxIdleIntervalNs).
           setMetrics(quorumControllerMetrics).

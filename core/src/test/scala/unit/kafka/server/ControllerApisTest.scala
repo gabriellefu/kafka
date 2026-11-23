@@ -279,10 +279,7 @@ class ControllerApisTest {
       ArgumentMatchers.eq(initialTimeMs)
     )
 
-    assertEquals(localTimeDurationMs, TimeUnit.MILLISECONDS.convert(
-      request.apiLocalCompleteTimeNanos - initialTimeNanos,
-      TimeUnit.NANOSECONDS
-    ))
+    assertEquals(localTimeDurationMs, TimeUnit.NANOSECONDS.toMillis(request.apiLocalCompleteTimeNanos - initialTimeNanos))
   }
 
   @Test

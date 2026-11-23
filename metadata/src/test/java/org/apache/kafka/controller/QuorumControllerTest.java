@@ -870,7 +870,7 @@ public class QuorumControllerTest {
                     }
                     return !active.replicationControl().arePartitionLeadersImbalanced();
                 },
-                TimeUnit.MILLISECONDS.convert(leaderImbalanceCheckIntervalNs * 10, TimeUnit.NANOSECONDS),
+                TimeUnit.NANOSECONDS.toMillis(leaderImbalanceCheckIntervalNs * 10),
                 "Leaders were not balanced after unfencing all of the brokers"
             );
 

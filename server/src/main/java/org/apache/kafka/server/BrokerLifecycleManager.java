@@ -659,7 +659,7 @@ public class BrokerLifecycleManager {
                             }
                             // Schedule the heartbeat after only 10 ms so that in the case where
                             // there is no recovery work to be done, we start up a bit quicker.
-                            scheduleNextCommunication(NANOSECONDS.convert(10, MILLISECONDS));
+                            scheduleNextCommunication(MILLISECONDS.toNanos(10));
                         }
                         case RECOVERY -> {
                             if (!responseData.isFenced()) {
@@ -684,7 +684,7 @@ public class BrokerLifecycleManager {
                                     // schedule our next heartbeat a little bit sooner than we usually would.
                                     // In the case where controlled shutdown completes quickly, this will
                                     // speed things up a little bit.
-                                    scheduleNextCommunication(NANOSECONDS.convert(50, MILLISECONDS));
+                                    scheduleNextCommunication(MILLISECONDS.toNanos(50));
                                 } else {
                                     scheduleNextCommunicationAfterSuccess();
                                 }
@@ -714,17 +714,17 @@ public class BrokerLifecycleManager {
 
     private void scheduleNextCommunicationAfterFailure() {
         nextSchedulingShouldBeImmediate = false; // never immediately reschedule after a failure
-        scheduleNextCommunication(NANOSECONDS.convert(config.brokerHeartbeatIntervalMs(), MILLISECONDS));
+        scheduleNextCommunication(MILLISECONDS.toNanos(config.brokerHeartbeatIntervalMs()));
     }
 
     private void scheduleNextCommunicationAfterSuccess() {
-        scheduleNextCommunication(NANOSECONDS.convert(config.brokerHeartbeatIntervalMs(), MILLISECONDS));
+        scheduleNextCommunication(MILLISECONDS.toNanos(config.brokerHeartbeatIntervalMs()));
     }
 
     private void scheduleNextCommunication(long intervalNs) {
         long adjustedIntervalNs = nextSchedulingShouldBeImmediate ? 0 : intervalNs;
         nextSchedulingShouldBeImmediate = false;
-        logger.trace("Scheduling next communication at {}ms from now.", MILLISECONDS.convert(adjustedIntervalNs, NANOSECONDS));
+        logger.trace("Scheduling next communication at {}ms from now.", NANOSECONDS.toMillis(adjustedIntervalNs));
         long deadlineNs = time.nanoseconds() + adjustedIntervalNs;
         eventQueue.scheduleDeferred("communication", new EventQueue.DeadlineFunction(deadlineNs), new CommunicationEvent());
     }

@@ -183,7 +183,7 @@ public class KafkaEventQueueTest {
         }
     }
 
-    private static final long ONE_HOUR_NS = TimeUnit.NANOSECONDS.convert(1, HOURS);
+    private static final long ONE_HOUR_NS = HOURS.toNanos(1);
 
     @Test
     public void testScheduleDeferredWithTagReplacement() throws Exception {

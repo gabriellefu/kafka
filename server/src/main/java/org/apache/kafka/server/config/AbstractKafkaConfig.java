@@ -812,9 +812,8 @@ public abstract class AbstractKafkaConfig extends AbstractConfig {
     }
 
     public OptionalLong metadataMaxIdleIntervalNs() {
-        long value = TimeUnit.NANOSECONDS.convert(
-                getInt(MetadataLogConfig.METADATA_MAX_IDLE_INTERVAL_MS_CONFIG).longValue(),
-                TimeUnit.MILLISECONDS);
+        long value = TimeUnit.MILLISECONDS.toNanos(
+                getInt(MetadataLogConfig.METADATA_MAX_IDLE_INTERVAL_MS_CONFIG).longValue());
         return value > 0 ? OptionalLong.of(value) : OptionalLong.empty();
     }
 

@@ -787,7 +787,7 @@ public class KStreamAggregationIntegrationTest {
             new KeyValue<>("emily", "pause")
         );
 
-        final long t1 = mockTime.milliseconds() - TimeUnit.MILLISECONDS.convert(1, TimeUnit.HOURS);
+        final long t1 = mockTime.milliseconds() - TimeUnit.HOURS.toMillis(1);
         IntegrationTestUtils.produceKeyValuesSynchronouslyWithTimestamp(
             userSessionsStream,
             t1Messages,
@@ -995,10 +995,10 @@ public class KStreamAggregationIntegrationTest {
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     public void shouldCountUnlimitedWindows(final boolean withHeaders) throws Exception {
-        final long startTime = mockTime.milliseconds() - TimeUnit.MILLISECONDS.convert(1, TimeUnit.HOURS) + 1;
+        final long startTime = mockTime.milliseconds() - TimeUnit.HOURS.toMillis(1) + 1;
         final long incrementTime = Duration.ofDays(1).toMillis();
 
-        final long t1 = mockTime.milliseconds() - TimeUnit.MILLISECONDS.convert(1, TimeUnit.HOURS);
+        final long t1 = mockTime.milliseconds() - TimeUnit.HOURS.toMillis(1);
         final List<KeyValue<String, String>> t1Messages = Arrays.asList(
             new KeyValue<>("bob", "start"),
             new KeyValue<>("penny", "start"),

@@ -92,7 +92,7 @@ public final class ConsumerRebalanceMetricsManager extends RebalanceMetricsManag
             if (lastRebalanceEndMs == -1L)
                 return -1d;
             else
-                return TimeUnit.SECONDS.convert(now - lastRebalanceEndMs, TimeUnit.MILLISECONDS);
+                return TimeUnit.MILLISECONDS.toSeconds(now - lastRebalanceEndMs);
         };
         lastRebalanceSecondsAgo = createMetric(
                 "last-rebalance-seconds-ago",

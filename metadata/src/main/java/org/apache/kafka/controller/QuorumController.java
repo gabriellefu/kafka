@@ -148,7 +148,6 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
-import static java.util.concurrent.TimeUnit.MICROSECONDS;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static org.apache.kafka.controller.QuorumController.ControllerOperationFlag.DOES_NOT_UPDATE_QUEUE_TIME;
@@ -547,7 +546,7 @@ public final class QuorumController implements Controller {
         long endProcessingTime = time.nanoseconds();
         long deltaNs = endProcessingTime - startProcessingTimeNs;
         log.debug("Processed {} in {} us", name,
-            MICROSECONDS.convert(deltaNs, NANOSECONDS));
+            NANOSECONDS.toMicros(deltaNs));
         performanceMonitor.observeEvent(name, deltaNs);
         controllerMetrics.updateEventQueueProcessingTime(NANOSECONDS.toMillis(deltaNs));
     }
@@ -563,7 +562,7 @@ public final class QuorumController implements Controller {
             long deltaNs = endProcessingTime - startProcessingTimeNs.getAsLong();
             performanceMonitor.observeEvent(name, deltaNs);
             controllerMetrics.updateEventQueueProcessingTime(NANOSECONDS.toMillis(deltaNs));
-            deltaUs = OptionalLong.of(MICROSECONDS.convert(deltaNs, NANOSECONDS));
+            deltaUs = OptionalLong.of(NANOSECONDS.toMicros(deltaNs));
         } else {
             deltaUs = OptionalLong.empty();
         }

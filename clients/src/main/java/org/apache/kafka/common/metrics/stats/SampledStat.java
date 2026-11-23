@@ -108,7 +108,7 @@ public abstract class SampledStat implements MeasurableStat {
      * @param unit   the time unit for the window.
      */
     protected void withTimeWindow(long window, TimeUnit unit) {
-        this.timeWindowMs = TimeUnit.MILLISECONDS.convert(window, unit);
+        this.timeWindowMs = unit.toMillis(window);
     }
 
     @Override

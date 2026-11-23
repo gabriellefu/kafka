@@ -146,7 +146,7 @@ public final class Sensor {
         this.stats = new ArrayList<>();
         this.config = config;
         this.time = time;
-        this.inactiveSensorExpirationTimeMs = TimeUnit.MILLISECONDS.convert(inactiveSensorExpirationTimeSeconds, TimeUnit.SECONDS);
+        this.inactiveSensorExpirationTimeMs = TimeUnit.SECONDS.toMillis(inactiveSensorExpirationTimeSeconds);
         this.lastRecordTime = time.milliseconds();
         this.recordingLevel = recordingLevel;
         this.metricLock = new Object();

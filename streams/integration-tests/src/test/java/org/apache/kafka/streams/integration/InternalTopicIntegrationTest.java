@@ -343,7 +343,7 @@ public class InternalTopicIntegrationTest {
         assertTrue(policies.contains(TopicConfig.CLEANUP_POLICY_COMPACT));
         assertTrue(policies.contains(TopicConfig.CLEANUP_POLICY_DELETE));
         // retention should be 1 day + the window duration
-        final long retention = TimeUnit.MILLISECONDS.convert(1, TimeUnit.DAYS) + durationMs;
+        final long retention = TimeUnit.DAYS.toMillis(1) + durationMs;
         assertEquals(retention, Long.parseLong(properties.getProperty(TopicConfig.RETENTION_MS_CONFIG)));
 
         final Properties repartitionProps = getTopicProperties(appID + "-CountWindows-repartition");

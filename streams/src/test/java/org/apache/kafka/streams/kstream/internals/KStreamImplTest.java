@@ -1283,7 +1283,7 @@ public class KStreamImplTest {
         final StreamsBuilder builder = new StreamsBuilder();
         final KStream<String, String> kStream = builder.stream("topic-1", stringConsumed);
         final ValueJoiner<String, String, String> valueJoiner = MockValueJoiner.instance(":");
-        final long windowSize = TimeUnit.MILLISECONDS.convert(1, TimeUnit.DAYS);
+        final long windowSize = TimeUnit.DAYS.toMillis(1);
         final KStream<String, String> stream = kStream
             .map((key, value) -> KeyValue.pair(value, value));
         stream.join(kStream,
@@ -1311,7 +1311,7 @@ public class KStreamImplTest {
         final StreamsBuilder builder = new StreamsBuilder();
         final KStream<String, String> kStream = builder.stream("topic-1", stringConsumed);
         final ValueJoiner<String, String, String> valueJoiner = MockValueJoiner.instance(":");
-        final long windowSize = TimeUnit.MILLISECONDS.convert(1, TimeUnit.DAYS);
+        final long windowSize = TimeUnit.DAYS.toMillis(1);
         final KStream<String, String> stream = kStream
             .map((key, value) -> KeyValue.pair(value, value));
         stream.join(

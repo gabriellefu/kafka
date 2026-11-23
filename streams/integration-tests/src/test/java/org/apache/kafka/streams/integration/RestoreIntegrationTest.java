@@ -745,8 +745,8 @@ public class RestoreIntegrationTest {
                 .collect(Collectors.toMap(e -> e.getKey().tags().get("task-id"), e -> ((Double) e.getValue().metricValue()).longValue()));
 
         for (final Map.Entry<TopicPartition, Long> entry : restoreListener.changelogToRestoreTime().entrySet()) {
-            final long lowerBound = entry.getValue() - TimeUnit.NANOSECONDS.convert(1, TimeUnit.SECONDS);
-            final long upperBound = entry.getValue() + TimeUnit.NANOSECONDS.convert(1, TimeUnit.SECONDS);
+            final long lowerBound = entry.getValue() - TimeUnit.SECONDS.toNanos(1);
+            final long upperBound = entry.getValue() + TimeUnit.SECONDS.toNanos(1);
             final Long metricValue = taskIdToMetricValue.get("0_" + entry.getKey().partition());
             assertTrue(metricValue != null && metricValue >= lowerBound && metricValue <= upperBound);
         }

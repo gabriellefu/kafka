@@ -50,7 +50,7 @@ public class KafkaConsumerMetrics extends AbstractConsumerMetricsManager {
                 // if no poll is ever triggered, just return -1.
                 return -1d;
             else
-                return TimeUnit.SECONDS.convert(now - lastPollMs, TimeUnit.MILLISECONDS);
+                return TimeUnit.MILLISECONDS.toSeconds(now - lastPollMs);
         };
         this.lastPollMetricName = metrics.metricName("last-poll-seconds-ago",
             metricGroupName, "The number of seconds since the last poll() invocation.");

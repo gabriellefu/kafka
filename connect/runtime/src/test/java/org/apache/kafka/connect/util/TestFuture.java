@@ -82,7 +82,7 @@ public class TestFuture<T> implements Future<T> {
 
         synchronized (this) {
             while (!resolved) {
-                this.wait(TimeUnit.MILLISECONDS.convert(timeout, unit));
+                this.wait(unit.toMillis(timeout));
             }
         }
 

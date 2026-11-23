@@ -33,12 +33,12 @@ public class ConfigSynonym {
 
     public static final Function<String, String> HOURS_TO_MILLISECONDS = input -> {
         int hours = valueToInt(input, 0, "hoursToMilliseconds");
-        return String.valueOf(TimeUnit.MILLISECONDS.convert(hours, TimeUnit.HOURS));
+        return String.valueOf(TimeUnit.HOURS.toMillis(hours));
     };
 
     public static final Function<String, String> MINUTES_TO_MILLISECONDS = input -> {
         int hours = valueToInt(input, 0, "minutesToMilliseconds");
-        return String.valueOf(TimeUnit.MILLISECONDS.convert(hours, TimeUnit.MINUTES));
+        return String.valueOf(TimeUnit.MINUTES.toMillis(hours));
     };
 
     private static int valueToInt(String input, int defaultValue, String what) {

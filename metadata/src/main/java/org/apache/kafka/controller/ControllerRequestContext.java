@@ -27,7 +27,6 @@ import java.util.OptionalLong;
 import java.util.function.Consumer;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
-import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 
 public class ControllerRequestContext {
@@ -36,7 +35,7 @@ public class ControllerRequestContext {
         Time time,
         int millisecondsOffset
     ) {
-        return OptionalLong.of(time.nanoseconds() + NANOSECONDS.convert(millisecondsOffset, MILLISECONDS));
+        return OptionalLong.of(time.nanoseconds() + MILLISECONDS.toNanos(millisecondsOffset));
     }
 
     private final KafkaPrincipal principal;
